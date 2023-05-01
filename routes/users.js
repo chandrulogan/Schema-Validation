@@ -1,43 +1,96 @@
 var express = require('express');
 var router = express.Router();
 const {usersModel, mongoose} = require('../dbSchema')
-const {mongodb, dbName, dbUrl} = require('../dbConfig')
-const {hashPassword, hashCompare} = require('../auth')
+const {dbUrl} = require('../dbConfig')
+const {hashPassword, hashCompare, createToken, jwtDecode, validate} = require('../auth');
+const {dataModel} = require('../dataSchema')
+
+
+const {mongodb,dbdName,dbdUrl,MongoClient} = require('../dbdConfig');
+const client = new MongoClient(dbdUrl);
+
+
 
 mongoose.connect(dbUrl)
 
 /* GET users listing. */
-router.get('/', async(req, res)=> {
-    let users = await usersModel.find()
-  res.send({
-    statusCode: 200,
-    data: users
-  })
+router.get('/', validate, async(req, res)=> {
+    let token = req.headers.authorization.split(" ")[1]
+    let data = await jwtDecode(token)
+    let users = await usersModel.findOne({email:data.email})
+    if(users)
+    {
+        await client.connect();  
+        try{
+            const db = client.db(dbdName)
+            let request = await db.collection('datas').find().toArray();
+            res.send({
+              statusCode:200,
+              data:request
+            })
+          } catch (error){
+            console.log(error);
+            res.send({
+              statusCode:500,
+              message:"Internal Server",
+              error
+            })
+            }
+            finally{
+              client.close()
+            }
+    } else{
+        res.send({
+            statusCode: 400,
+            message: "Unauthorized"
+        })
+    }
 });
 
-router.post('/signup', async(req, res)=> {
+router.post('/signin', async(req, res)=>{
     try{
         const user = await usersModel.find({email:req.body.email})
         console.log(user);
         if(user.length)
         {
+            let hash = await hashCompare(req.body.password,user[0].password)
+
+            if(hash)
+            {
+                let token = await createToken(user[0].email, user[0].password)
+                res.send({statusCode: 200, message: "Sign-In successfull!!!", token})
+            } else{
+                res.send({
+                    statusCode: 400,
+                    message: "Invalid Credentials"
+                })
+            }
+        } else {
             res.send({
                 statusCode: 400,
-                message: "User Alreay Exist"
+                message: "User Does not Exist"
             })
-        } else {
-            const hashedPassword = await hashPassword(req.body.password)
-            req.body.password = hashedPassword
-            let newUser = await usersModel.create(req.body);
-        res.send({
-            statusCode: 200,
-            message: "Sign Up Successful"
-        })
-        }     
-    } catch(error){
+        }    
+    } catch (error){
         console.log(error);
         res.send({statusCode: 500, message: "Internal server error", error})
     }
-  });
+})
+
+router.delete('/delete/:id', async (req, res) => {
+  try {
+    let user = await dataModel.findOne({_id: req.params.id})
+    if (user) {
+      let deletedUser = await dataModel.deleteOne({_id: req.params.id})
+      res.send({statusCode: 200, message: "User Deleted Successfully", deletedUser})
+    } else {
+      res.send({statusCode: 400, message: "User does not exist"})
+    }
+  } catch (error) {
+    console.log(error)
+    res.send({statusCode: 500, message: "Internal Server Error", error})
+  }
+});
+
 
 module.exports = router;
